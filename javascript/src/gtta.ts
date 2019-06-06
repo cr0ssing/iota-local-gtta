@@ -1,26 +1,85 @@
-import { Hash } from '@iota/core/typings/types';
-import { Info, latestMilestone, tails, milestones, areTxsConsistent } from './tangle';
+import { Hash, Callback, TransactionsToApprove } from '@iota/core/typings/types';
+import { Info, latestMilestone, tails, milestones, areTxsConsistent, txs } from './tangle';
+import * as Bluebird from 'bluebird';
+import debug from 'debug';
 
-export async function getTips(depth: number) {
+const log = debug('local-gtta');
+
+/**
+ * Does the _tip selection_ by calling
+ * [`getTransactionsToApprove`](https://docs.iota.works/iri/api#endpoints/getTransactionsToApprove) command.
+ * Returns a pair of approved transactions, which are chosen randomly after validating the transaction trytes,
+ * the signatures and cross-checking for conflicting transactions.
+ *
+ * Tip selection is executed by a Random Walk (RW) starting at random point in given `depth`
+ * ending up to the pair of selected tips. For more information about tip selection please refer to the
+ * [whitepaper](https://iota.org/IOTA_Whitepaper.pdf).
+ *
+ * The `reference` option allows to select tips in a way that the reference transaction is being approved too.
+ * This is useful for promoting transactions, for example with
+ * [`promoteTransaction`]{@link #module_core.promoteTransaction}.
+ *
+ * @example
+ *
+ * ```js
+ * const depth = 3
+ * const minWeightMagnitude = 14
+ *
+ * getTransactionsToApprove(depth)
+ *   .then(transactionsToApprove =>
+ *      attachToTangle(minWeightMagnitude, trytes, { transactionsToApprove })
+ *   )
+ *   .then(storeAndBroadcast)
+ *   .catch(err => {
+ *     // handle errors here
+ *   })
+ * ```
+ *
+ * @method getTransactionsToApprove
+ *
+ * @memberof module:core
+ *
+ * @param {number} depth - The depth at which Random Walk starts. A value of `3` is typically used by wallets,
+ * meaning that RW starts 3 milestones back.
+ * @param {Hash} [reference] - Optional reference transaction hash
+ * @param {Callback} [callback] - Optional callback
+ *
+ * @return {Promise}
+ * @fulfil {trunkTransaction, branchTransaction} A pair of approved transactions
+ * @reject {Error}
+ * - `INVALID_DEPTH`
+ * - `INVALID_REFERENCE_HASH`: Invalid reference hash
+ * - Fetch error
+ */
+export function getTransactionsToApprove(
+  depth: number,
+  reference?: Hash,
+  callback?: Callback<TransactionsToApprove>,
+): Bluebird<TransactionsToApprove> {
+  return Bluebird.resolve(getTips(depth, reference))
+    .asCallback(typeof arguments[1] === 'function' ? arguments[1] : callback);
+}
+
+async function getTips(depth: number, reference?: Hash) {
   const entryMilestone = latestMilestone - depth;
   const milestone = milestones.get(entryMilestone);
   if (milestone && milestone.size > 0) {
     let entries = Array.from(milestone);
     const inconsistentTxs = new Set<Hash>();
 
-    const findTips: () => Promise<{trunk: Hash, branch: Hash}> = async () => {
+    const findTips: () => Promise<{trunkTransaction: Hash, branchTransaction: Hash}> = async () => {
       if (entries.length === 0) {
         throw new Error('No consistent entry points available.');
       }
       const tips =  await Promise.all([randomWalk(entries, depth, inconsistentTxs),
-        randomWalk(entries, depth, inconsistentTxs)]);
+        randomWalk(entries, depth, inconsistentTxs, reference)]);
       if (tips.filter((t) => t).length === 2) {
         if (await areTxsConsistent(...tips.map((t) => t!.hash))) {
           const hashes = tips.map((t) => t!.hash);
-          return {trunk: hashes[0], branch: hashes[1]};
+          return {trunkTransaction: hashes[0], branchTransaction: hashes[1]};
         } else {
           tips.forEach((t) => inconsistentTxs.add(t!.hash));
-          console.log('Selected tips ar not consistent. Try again.');
+          log('Selected tips ar not consistent. Try again.');
           entries = entries.filter((t) => !inconsistentTxs.has(t.hash));
           return await findTips();
         }
@@ -34,18 +93,30 @@ export async function getTips(depth: number) {
   }
 }
 
-async function randomWalk(entries: Info[], depth: number, inconsistentTxs = new Set<Hash>()):
+async function randomWalk(entries: Info[], depth: number, inconsistentTxs: Set<Hash>, reference?: Hash):
     Promise<Info | undefined> {
   const validEntries = entries.filter((e) => !inconsistentTxs.has(e.hash));
   if (validEntries.length === 0) {
     return undefined;
   } else {
-    const {tx, traversed} = await select(validEntries, inconsistentTxs, (depth + 1) * 4);
+    let entryPoint: Info;
+    if (reference) {
+      const refTx = txs.get(reference);
+      if (refTx) {
+        entryPoint = refTx;
+      } else {
+        throw new Error('Invalid reference');
+      }
+    } else {
+      entryPoint = getEntryPoint(validEntries);
+    }
+
+    const {tx, traversed} = await select(entryPoint, inconsistentTxs, (depth + 1) * 4);
     if (tx.approvers === 0) {
-      console.log(`Traversed ${traversed.size} consistent txs for random walk`);
+      log(`Traversed ${traversed.size} consistent txs for random walk`);
       return tx;
     } else {
-      console.log('Can\'t find consistent tip.');
+      log('Can\'t find consistent tip.');
       return undefined;
     }
   }
@@ -53,9 +124,12 @@ async function randomWalk(entries: Info[], depth: number, inconsistentTxs = new 
 
 const alpha = .001;
 
-async function select(validEntries: Info[], inconsistentTxs: Set<Hash>, verifyBatchSize: number) {
+function getEntryPoint(validEntries: Info[]) {
   const index = Math.round(Math.random() * (validEntries.length - 1));
-  const entryPoint = validEntries[index];
+  return validEntries[index];
+}
+
+async function select(entryPoint: Info, inconsistentTxs: Set<Hash>, verifyBatchSize: number) {
   const traversed = new Set<Hash>();
 
   let tx = entryPoint;
@@ -89,7 +163,7 @@ async function select(validEntries: Info[], inconsistentTxs: Set<Hash>, verifyBa
         if (await areTxsConsistent(...toVerify)) {
           lastValid = tx;
         } else {
-          console.log(`Traversed txs aren\'t consistent. Go back ${verifyBatchSize + 1} steps.`);
+          log(`Traversed txs aren\'t consistent. Go back ${verifyBatchSize + 1} steps.`);
           toVerify.forEach((t) => {
             inconsistentTxs.add(t);
             traversed.delete(t);
