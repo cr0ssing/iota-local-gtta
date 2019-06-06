@@ -1,0 +1,38 @@
+{
+  "name": "iota-local-gtta",
+  "version": "1.0.0",
+  "description": "",
+  "main": "out/index.js",
+  "types": "out/index.d.ts",
+  "files": [
+    "out",
+    "src"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Robin Lamberti <lamberti.robin@gmail.com>",
+  "license": "ISC",
+  "dependencies": {
+    "@iota/converter": "^1.0.0-beta.12",
+    "@iota/core": "^1.0.0-beta.12",
+    "@iota/transaction-converter": "^1.0.0-beta.12",
+    "@types/zeromq": "^4.6.2",
+    "bluebird": "^3.5.4",
+    "express": "^4.17.1",
+    "zeromq": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/bluebird": "^3.5.26",
+    "@types/chai": "^4.1.7",
+    "@types/express": "^4.16.1",
+    "@types/mocha": "^5.2.6",
+    "@types/node": "7.0.22",
+    "chai": "^4.2.0",
+    "jsdoc-to-markdown": "^4.0.1",
+    "mocha": "^5.2.0",
+    "ts-node": "^8.0.2",
+    "tslint": "^5.13.0",
+    "typescript": "^3.3.3333"
+  }
+}
