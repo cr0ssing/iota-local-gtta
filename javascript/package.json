@@ -21,7 +21,7 @@
     "@types/zeromq": "^4.6.2",
     "bluebird": "^3.5.4",
     "debug": "^4.1.1",
-    "express": "^4.17.1",
+    "express": "^4.17.3",
     "zeromq": "^5.1.0"
   },
   "devDependencies": {
